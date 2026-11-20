@@ -4,8 +4,8 @@ A small experiment testing whether GPT, Gemini, Claude, or a local Ollama
 model can improve a recurrent neural network by directly modifying its weights.
 
 **No gradient descent, backpropagation, optimizer, or RL weight updates are
-used.** The RNN performs inference only. The selected LLM proposes bounded scalar
-changes to its existing weight matrices.
+used.** The RNN performs inference only. The selected LLM proposes bounded
+scalar changes to its existing weight matrices.
 
 ## Architecture
 
@@ -86,13 +86,36 @@ Copy the example environment file:
 Copy-Item .env.example .env
 ```
 
-Add the API key for each cloud provider you want to test to `.env`. Ollama
-runs locally and does not require an API key. Model names can be overridden
-with `GEMINI_MODEL`, `OPENAI_MODEL`, `ANTHROPIC_MODEL`, and `OLLAMA_MODEL`;
-defaults are in `config.py`. Install Ollama and pull a model before running,
-for example `ollama pull qwen2.5:7b-instruct`. Make sure the Ollama service is
-running; its default address is `http://localhost:11434`, configurable with
-`OLLAMA_BASE_URL`.
+Add the API key for each cloud provider you want to test to `.env`. Only the
+selected cloud provider needs a key. Ollama runs locally and does not need an
+API key.
+
+### Try a local model with Ollama
+
+1. Install Ollama for Windows from [ollama.com/download](https://ollama.com/download).
+2. Open PowerShell and download a model. The project default is:
+
+   ```powershell
+   ollama pull qwen2.5:7b-instruct
+   ```
+
+   You can use another Ollama model instead, such as `llama3.1:8b`.
+3. Make sure the Ollama service is running, then start the experiment:
+
+   ```powershell
+   python main.py --mode evolve --llm ollama --generations 3 --output-dir generations\ollama
+   ```
+
+Ollama's default server address is `http://localhost:11434`. Set
+`OLLAMA_BASE_URL` in `.env` if your server uses a different address. The
+default local model is `qwen2.5:7b-instruct`; change `OLLAMA_MODEL` in `.env`
+or pass `--llm-model` on the command line to select another model. The prompt
+and model request are sent to the configured Ollama server; no cloud-provider
+API key is used for this option.
+
+Cloud model defaults and Ollama settings can also be overridden in `.env`:
+`GEMINI_MODEL`, `OPENAI_MODEL`, `ANTHROPIC_MODEL`, `OLLAMA_MODEL`, and
+`OLLAMA_BASE_URL`. Defaults are listed in `config.py`.
 
 ## 6. Run sequential generations with a chosen LLM
 
@@ -105,11 +128,17 @@ python main.py --mode evolve --llm ollama --generations 3 --output-dir generatio
 
 Use `--llm-model` to override the selected provider's default model, for example
 `--llm gpt --llm-model gpt-4o`. Supported `--llm` values are `gemini`, `gpt`,
-`claude`, and `ollama`. To select a different local model, use for example
-`--llm ollama --llm-model llama3.1:8b`. Without `--output-dir`, runs continue to use the shared
-`generations/` directory. Use separate output directories when comparing
-providers so one run does not overwrite another provider's checkpoints or
-metrics.
+`claude`, and `ollama`. To select a different local model, use:
+
+```powershell
+python main.py --mode evolve --llm ollama --llm-model llama3.1:8b --generations 3 --output-dir generations\ollama-llama
+```
+
+Without `--output-dir`, runs use the shared `generations/` directory. Use a
+different output directory for each provider/model comparison so runs do not
+overwrite each other's checkpoints or metrics. Each run writes its own
+`best.json`, history, generation data, and held-out evaluation in that
+directory.
 
 Generation 0 is the random baseline. Each subsequent generation is one
 LLM proposal applied to the best checkpoint so far. Only one model
