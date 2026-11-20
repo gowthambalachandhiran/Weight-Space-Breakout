@@ -20,6 +20,14 @@ class OllamaWeightProgrammer(BaseWeightProgrammer):
         self.base_url = (
             base_url or os.getenv("OLLAMA_BASE_URL", config.OLLAMA_BASE_URL)
         ).rstrip("/")
+        try:
+            self.timeout = int(os.getenv(
+                "OLLAMA_TIMEOUT_SECONDS", str(config.OLLAMA_TIMEOUT_SECONDS)
+            ))
+        except ValueError as exc:
+            raise ValueError("OLLAMA_TIMEOUT_SECONDS must be an integer.") from exc
+        if self.timeout <= 0:
+            raise ValueError("OLLAMA_TIMEOUT_SECONDS must be greater than zero.")
 
     def propose_modifications(self, weights, metrics, generation):
         body = {
@@ -34,6 +42,7 @@ class OllamaWeightProgrammer(BaseWeightProgrammer):
                 },
             ],
             "format": "json",
+            "think": False,
             "stream": False,
             "options": {"temperature": 0.4},
         }
@@ -41,6 +50,7 @@ class OllamaWeightProgrammer(BaseWeightProgrammer):
             f"{self.base_url}/api/chat",
             body,
             {"Content-Type": "application/json"},
+            timeout=self.timeout,
         )
         try:
             raw = response_data["message"]["content"]
@@ -48,4 +58,18 @@ class OllamaWeightProgrammer(BaseWeightProgrammer):
             raise RuntimeError(
                 f"Unexpected Ollama response: {response_data}"
             ) from exc
+        if not isinstance(raw, str) or not raw.strip():
+            message = response_data.get("message", {})
+            details = []
+            if message.get("thinking"):
+                details.append("the model returned thinking but no final answer")
+            done_reason = response_data.get("done_reason")
+            if done_reason:
+                details.append(f"generation ended with reason {done_reason!r}")
+            suffix = f" ({'; '.join(details)})" if details else ""
+            raise RuntimeError(
+                f"Ollama returned an empty final answer{suffix}. "
+                "Thinking is disabled for this request; check the model/server "
+                "and try again."
+            )
         return self._parse_proposal(raw)

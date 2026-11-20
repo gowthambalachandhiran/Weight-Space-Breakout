@@ -17,6 +17,7 @@ OPENAI_MODEL = "gpt-4o-mini"
 ANTHROPIC_MODEL = "claude-3-5-sonnet-latest"
 OLLAMA_MODEL = "qwen2.5:7b-instruct"
 OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_TIMEOUT_SECONDS = 600
 MAX_WEIGHT_PATCHES = 12
 MAX_PATCH_DELTA = 0.15
 WEIGHT_ABS_LIMIT = 3.0

@@ -111,7 +111,9 @@ Ollama's default server address is `http://localhost:11434`. Set
 default local model is `qwen2.5:7b-instruct`; change `OLLAMA_MODEL` in `.env`
 or pass `--llm-model` on the command line to select another model. The prompt
 and model request are sent to the configured Ollama server; no cloud-provider
-API key is used for this option.
+API key is used for this option. Local inference may take longer than a cloud
+request: the default request timeout is 600 seconds (10 minutes). Increase
+`OLLAMA_TIMEOUT_SECONDS` in `.env` if your machine needs more time.
 
 Cloud model defaults and Ollama settings can also be overridden in `.env`:
 `GEMINI_MODEL`, `OPENAI_MODEL`, `ANTHROPIC_MODEL`, `OLLAMA_MODEL`, and

@@ -66,6 +66,12 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(programmer.provider_name, "Ollama")
         self.assertEqual(programmer.model_name, "test-local-model")
         self.assertIsNone(programmer.api_key)
+        self.assertEqual(programmer.timeout, 600)
+
+    def test_ollama_timeout_can_be_configured(self):
+        with patch.dict("os.environ", {"OLLAMA_TIMEOUT_SECONDS": "900"}):
+            programmer = create_programmer("ollama")
+        self.assertEqual(programmer.timeout, 900)
 
     def test_ollama_parses_json_chat_response(self):
         programmer = create_programmer("ollama", model_name="test-local-model")
@@ -80,6 +86,61 @@ class ProjectTests(unittest.TestCase):
             "reasoning": "small adjustment",
             "modifications": [],
         })
+
+    def test_ollama_disables_thinking_for_json_proposals(self):
+        programmer = create_programmer("ollama", model_name="test-local-model")
+        response = {
+            "message": {
+                "content": '{"reasoning":"small adjustment","modifications":[]}'
+            }
+        }
+        with patch.object(
+            programmer, "_post_json", return_value=response
+        ) as post_json:
+            programmer.propose_modifications({}, {}, 0)
+        body = post_json.call_args.args[1]
+        self.assertIs(body["think"], False)
+        self.assertEqual(body["format"], "json")
+
+    def test_ollama_empty_final_answer_has_clear_error(self):
+        programmer = create_programmer("ollama", model_name="test-local-model")
+        response = {
+            "message": {
+                "content": "",
+                "thinking": "internal trace",
+            },
+            "done_reason": "length",
+        }
+        with patch.object(programmer, "_post_json", return_value=response):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "empty final answer .*thinking but no final answer",
+            ):
+                programmer.propose_modifications({}, {}, 0)
+
+    def test_ollama_request_uses_configured_timeout(self):
+        programmer = create_programmer("ollama")
+        response = {
+            "message": {
+                "content": '{"reasoning":"small adjustment","modifications":[]}'
+            }
+        }
+        with patch.object(
+            programmer, "_post_json", return_value=response
+        ) as post_json:
+            programmer.propose_modifications({}, {}, 0)
+        self.assertEqual(post_json.call_args.kwargs["timeout"], 600)
+
+    def test_request_timeout_has_clear_error(self):
+        programmer = create_programmer("ollama")
+        with patch(
+            "programmer.base.urllib.request.urlopen",
+            side_effect=TimeoutError,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError, "Ollama request timed out after 17 seconds"
+            ):
+                programmer._post_json("http://localhost", {}, {}, timeout=17)
 
     def test_rejects_unknown_llm_provider(self):
         with self.assertRaisesRegex(ValueError, "Unknown LLM provider"):

@@ -64,7 +64,7 @@ class BaseWeightProgrammer:
             ),
         }
 
-    def _post_json(self, url, body, headers):
+    def _post_json(self, url, body, headers, timeout=120):
         request = urllib.request.Request(
             url,
             data=json.dumps(body).encode("utf-8"),
@@ -72,7 +72,7 @@ class BaseWeightProgrammer:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=120) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -81,6 +81,10 @@ class BaseWeightProgrammer:
             ) from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Could not reach {self.provider_name} API: {exc}") from exc
+        except TimeoutError as exc:
+            raise RuntimeError(
+                f"{self.provider_name} request timed out after {timeout} seconds."
+            ) from exc
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"Unexpected {self.provider_name} API response: invalid JSON") from exc
 
