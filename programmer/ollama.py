@@ -1,10 +1,44 @@
 """Local Ollama client for bounded scalar changes to RNN weights."""
 
 import json
+import math
 import os
 
 import config
 from programmer.base import BaseWeightProgrammer, SYSTEM_INSTRUCTIONS
+
+
+OLLAMA_PROPOSAL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reasoning": {"type": "string"},
+        "modifications": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "matrix": {
+                        "type": "string",
+                        "enum": ["W_xh", "W_hh", "W_hy", "b_h", "b_y"],
+                    },
+                    "row": {"type": "integer"},
+                    "column": {"type": "integer"},
+                    "index": {"type": "integer"},
+                    "delta": {
+                        "type": "number",
+                        "minimum": -0.15,
+                        "maximum": 0.15,
+                    },
+                },
+                "required": ["matrix", "delta"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["reasoning", "modifications"],
+    "additionalProperties": False,
+}
 
 
 class OllamaWeightProgrammer(BaseWeightProgrammer):
@@ -30,10 +64,18 @@ class OllamaWeightProgrammer(BaseWeightProgrammer):
             raise ValueError("OLLAMA_TIMEOUT_SECONDS must be greater than zero.")
 
     def propose_modifications(self, weights, metrics, generation):
+        ollama_instructions = (
+            f"{SYSTEM_INSTRUCTIONS}\n"
+            "Return only a conservative proposal; you cannot apply edits or "
+            "claim that you have applied them. Do not return summaries, metrics, "
+            "full matrices, or next steps. For each modification, include all "
+            "coordinates required for that matrix: row and column for matrices, "
+            "or index for biases. Prefer a small number of individual scalar edits."
+        )
         body = {
             "model": self.model_name,
             "messages": [
-                {"role": "system", "content": SYSTEM_INSTRUCTIONS},
+                {"role": "system", "content": ollama_instructions},
                 {
                     "role": "user",
                     "content": json.dumps(
@@ -41,7 +83,7 @@ class OllamaWeightProgrammer(BaseWeightProgrammer):
                     ),
                 },
             ],
-            "format": "json",
+            "format": OLLAMA_PROPOSAL_SCHEMA,
             "think": False,
             "stream": False,
             "options": {"temperature": 0.4},
@@ -72,4 +114,68 @@ class OllamaWeightProgrammer(BaseWeightProgrammer):
                 "Thinking is disabled for this request; check the model/server "
                 "and try again."
             )
-        return self._parse_proposal(raw)
+        try:
+            proposal = self._parse_proposal(raw)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"Ollama returned an unusable proposal: {exc}. "
+                "The experiment stopped without applying any edits."
+            ) from exc
+        dimensions = {
+            "W_xh": (7, 16),
+            "W_hh": (16, 16),
+            "W_hy": (16, 3),
+            "b_h": (16,),
+            "b_y": (3,),
+        }
+        accepted = []
+        rejected_count = 0
+        for patch in proposal["modifications"]:
+            if len(accepted) >= config.MAX_WEIGHT_PATCHES or not isinstance(patch, dict):
+                rejected_count += 1
+                continue
+            matrix = patch.get("matrix")
+            delta = patch.get("delta")
+            if (
+                not isinstance(matrix, str)
+                or matrix not in dimensions
+                or isinstance(delta, bool)
+                or not isinstance(delta, (int, float))
+                or (isinstance(delta, float) and not math.isfinite(delta))
+                or abs(delta) > config.MAX_PATCH_DELTA
+            ):
+                rejected_count += 1
+                continue
+            if len(dimensions[matrix]) == 1:
+                index = patch.get("index")
+                if type(index) is not int or not 0 <= index < dimensions[matrix][0]:
+                    rejected_count += 1
+                    continue
+                accepted.append({
+                    "matrix": matrix,
+                    "index": index,
+                    "delta": delta,
+                })
+            else:
+                row, column = patch.get("row"), patch.get("column")
+                if (
+                    type(row) is not int
+                    or type(column) is not int
+                    or not 0 <= row < dimensions[matrix][0]
+                    or not 0 <= column < dimensions[matrix][1]
+                ):
+                    rejected_count += 1
+                    continue
+                accepted.append({
+                    "matrix": matrix,
+                    "row": row,
+                    "column": column,
+                    "delta": delta,
+                })
+        proposal["modifications"] = accepted
+        if rejected_count:
+            proposal["reasoning"] += (
+                f" The client discarded {rejected_count} invalid or excessive "
+                "modification(s); only validated bounded scalar edits are eligible."
+            )
+        return proposal

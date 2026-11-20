@@ -98,8 +98,10 @@ class BaseWeightProgrammer:
         if not isinstance(result, dict) or not isinstance(
             result.get("modifications"), list
         ):
+            keys = sorted(result) if isinstance(result, dict) else type(result).__name__
             raise RuntimeError(
-                f"{self.provider_name} must return a JSON object with modifications list"
+                f"{self.provider_name} must return a JSON object with "
+                f"a modifications list; received {keys}"
             )
         return {
             "reasoning": str(result.get("reasoning", "")),

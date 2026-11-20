@@ -77,14 +77,22 @@ class ProjectTests(unittest.TestCase):
         programmer = create_programmer("ollama", model_name="test-local-model")
         response = {
             "message": {
-                "content": '{"reasoning":"small adjustment","modifications":[]}'
+                "content": (
+                    '{"reasoning":"small adjustment","modifications":['
+                    '{"matrix":"W_hy","row":0,"column":1,"delta":0.03}]}'
+                )
             }
         }
         with patch.object(programmer, "_post_json", return_value=response):
             proposal = programmer.propose_modifications({}, {}, 0)
         self.assertEqual(proposal, {
             "reasoning": "small adjustment",
-            "modifications": [],
+            "modifications": [{
+                "matrix": "W_hy",
+                "row": 0,
+                "column": 1,
+                "delta": 0.03,
+            }],
         })
 
     def test_ollama_disables_thinking_for_json_proposals(self):
@@ -100,7 +108,8 @@ class ProjectTests(unittest.TestCase):
             programmer.propose_modifications({}, {}, 0)
         body = post_json.call_args.args[1]
         self.assertIs(body["think"], False)
-        self.assertEqual(body["format"], "json")
+        self.assertEqual(body["format"]["type"], "object")
+        self.assertIn("modifications", body["format"]["required"])
 
     def test_ollama_empty_final_answer_has_clear_error(self):
         programmer = create_programmer("ollama", model_name="test-local-model")
@@ -130,6 +139,50 @@ class ProjectTests(unittest.TestCase):
         ) as post_json:
             programmer.propose_modifications({}, {}, 0)
         self.assertEqual(post_json.call_args.kwargs["timeout"], 600)
+
+    def test_ollama_rejects_non_proposal_json_without_applying(self):
+        programmer = create_programmer("ollama", model_name="test-local-model")
+        response = {
+            "message": {
+                "content": '{"status":"success","modified_weights_preview":{}}'
+            }
+        }
+        with patch.object(programmer, "_post_json", return_value=response):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "unusable proposal.*modifications list.*without applying",
+            ):
+                programmer.propose_modifications({}, {}, 0)
+
+    def test_ollama_discards_invalid_patch_fields(self):
+        programmer = create_programmer("ollama", model_name="test-local-model")
+        response = {
+            "message": {
+                "content": (
+                    '{"reasoning":"edit","modifications":['
+                    '{"matrix":"W_hy","row":null,"column":null,"delta":0.03}]}'
+                )
+            }
+        }
+        with patch.object(programmer, "_post_json", return_value=response):
+            proposal = programmer.propose_modifications({}, {}, 0)
+        self.assertEqual(proposal["modifications"], [])
+        self.assertIn("discarded 1 invalid", proposal["reasoning"])
+
+    def test_ollama_discards_out_of_range_deltas(self):
+        programmer = create_programmer("ollama", model_name="test-local-model")
+        response = {
+            "message": {
+                "content": (
+                    '{"reasoning":"edit","modifications":['
+                    '{"matrix":"W_hy","row":0,"column":1,"delta":0.2}]}'
+                )
+            }
+        }
+        with patch.object(programmer, "_post_json", return_value=response):
+            proposal = programmer.propose_modifications({}, {}, 0)
+        self.assertEqual(proposal["modifications"], [])
+        self.assertIn("discarded 1 invalid", proposal["reasoning"])
 
     def test_request_timeout_has_clear_error(self):
         programmer = create_programmer("ollama")

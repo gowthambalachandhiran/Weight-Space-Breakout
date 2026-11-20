@@ -113,7 +113,10 @@ or pass `--llm-model` on the command line to select another model. The prompt
 and model request are sent to the configured Ollama server; no cloud-provider
 API key is used for this option. Local inference may take longer than a cloud
 request: the default request timeout is 600 seconds (10 minutes). Increase
-`OLLAMA_TIMEOUT_SECONDS` in `.env` if your machine needs more time.
+`OLLAMA_TIMEOUT_SECONDS` in `.env` if your machine needs more time. Ollama
+proposals are requested in a constrained JSON format; edits with invalid
+indices or deltas beyond the configured safety limit are discarded and
+reported rather than applied.
 
 Cloud model defaults and Ollama settings can also be overridden in `.env`:
 `GEMINI_MODEL`, `OPENAI_MODEL`, `ANTHROPIC_MODEL`, `OLLAMA_MODEL`, and
