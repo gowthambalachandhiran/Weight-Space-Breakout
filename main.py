@@ -34,12 +34,14 @@ def main():
         run_local_game(args.seed)
     elif args.mode == "watch":
         model = BreakoutRNN()
+        generations_dir = (
+            args.output_dir if args.output_dir is not None else config.GENERATIONS_DIR
+        )
         if args.generation is None:
-            checkpoint = config.GENERATIONS_DIR / "best.json"
+            checkpoint = generations_dir / "best.json"
         else:
             checkpoint = (
-                config.GENERATIONS_DIR
-                / f"generation_{args.generation:03d}"
+                generations_dir / f"generation_{args.generation:03d}"
                 / "weights.json"
             )
         if not checkpoint.exists():

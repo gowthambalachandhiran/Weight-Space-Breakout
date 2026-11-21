@@ -13,9 +13,13 @@ paddle_center_x [0,1], ball_offset_from_paddle [-1,1],
 vertical_distance_to_paddle [0,1].
 Actions selected by argmax: 0=left, 1=stay, 2=right.
 
-Use the supplied fixed-training-seed metrics and weights to propose a few
-conservative direct scalar changes. This is not gradient descent; do not claim
-a change is guaranteed to improve performance.
+Use the supplied fixed-training-seed metrics and weights to form a concrete,
+testable hypothesis about the RNN's behavior. Propose purposeful direct scalar
+changes that meaningfully test that hypothesis. Do not restrict proposals to
+tiny changes or only one or a few weights: use multiple coordinated edits and
+meaningful deltas when justified, within the limits below. Avoid arbitrary
+changes. This is not gradient descent; do not claim a change is guaranteed to
+improve performance.
 
 Return JSON only:
 {
@@ -25,7 +29,7 @@ Return JSON only:
     {"matrix":"b_y","index":2,"delta":-0.02}
   ]
 }
-At most 12 modifications. Each delta must be between -0.15 and +0.15.
+At most 50 modifications. Each delta must be between -1.0 and +1.0.
 For matrices use row and column. For bias vectors use index.
 Only use W_xh, W_hh, W_hy, b_h, b_y.
 No full matrices, markdown fences, code, or extra keys.

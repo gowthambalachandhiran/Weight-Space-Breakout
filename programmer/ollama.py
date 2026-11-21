@@ -14,7 +14,7 @@ OLLAMA_PROPOSAL_SCHEMA = {
         "reasoning": {"type": "string"},
         "modifications": {
             "type": "array",
-            "maxItems": 12,
+            "maxItems": 50,
             "items": {
                 "type": "object",
                 "properties": {
@@ -27,8 +27,8 @@ OLLAMA_PROPOSAL_SCHEMA = {
                     "index": {"type": "integer"},
                     "delta": {
                         "type": "number",
-                        "minimum": -0.15,
-                        "maximum": 0.15,
+                        "minimum": -1.0,
+                        "maximum": 1.0,
                     },
                 },
                 "required": ["matrix", "delta"],
@@ -62,15 +62,26 @@ class OllamaWeightProgrammer(BaseWeightProgrammer):
             raise ValueError("OLLAMA_TIMEOUT_SECONDS must be an integer.") from exc
         if self.timeout <= 0:
             raise ValueError("OLLAMA_TIMEOUT_SECONDS must be greater than zero.")
+        try:
+            self.temperature = float(os.getenv(
+                "OLLAMA_TEMPERATURE", str(config.OLLAMA_TEMPERATURE)
+            ))
+        except ValueError as exc:
+            raise ValueError("OLLAMA_TEMPERATURE must be a number.") from exc
+        if not math.isfinite(self.temperature) or not 0 <= self.temperature <= 2:
+            raise ValueError("OLLAMA_TEMPERATURE must be between 0 and 2.")
 
     def propose_modifications(self, weights, metrics, generation):
         ollama_instructions = (
             f"{SYSTEM_INSTRUCTIONS}\n"
-            "Return only a conservative proposal; you cannot apply edits or "
+            "Return a focused proposal that tests a plausible behavior "
+            "hypothesis; use multiple scalar edits when they are justified "
+            "and do not artificially minimize their count or size within the "
+            "stated limits. You cannot apply edits or "
             "claim that you have applied them. Do not return summaries, metrics, "
             "full matrices, or next steps. For each modification, include all "
             "coordinates required for that matrix: row and column for matrices, "
-            "or index for biases. Prefer a small number of individual scalar edits."
+            "or index for biases."
         )
         body = {
             "model": self.model_name,
@@ -86,7 +97,7 @@ class OllamaWeightProgrammer(BaseWeightProgrammer):
             "format": OLLAMA_PROPOSAL_SCHEMA,
             "think": False,
             "stream": False,
-            "options": {"temperature": 0.4},
+            "options": {"temperature": self.temperature},
         }
         response_data = self._post_json(
             f"{self.base_url}/api/chat",

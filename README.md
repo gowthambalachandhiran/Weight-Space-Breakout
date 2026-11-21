@@ -67,6 +67,12 @@ Watch a particular generation checkpoint:
 python main.py --mode watch --generation 2 --seed 42
 ```
 
+For a run saved in a custom output directory, pass that directory as well:
+
+```powershell
+python main.py --mode watch --output-dir generations\ollama-qwen3.5-4b --generation 5 --seed 42
+```
+
 In the viewer, R restarts the current seed, N advances to the next seed,
 and Esc quits. The RNN controls the paddle automatically.
 
@@ -116,11 +122,19 @@ request: the default request timeout is 600 seconds (10 minutes). Increase
 `OLLAMA_TIMEOUT_SECONDS` in `.env` if your machine needs more time. Ollama
 proposals are requested in a constrained JSON format; edits with invalid
 indices or deltas beyond the configured safety limit are discarded and
-reported rather than applied.
+reported rather than applied. The shared prompt encourages meaningful,
+hypothesis-driven proposals and coordinated edits instead of artificially
+minimizing changes. Safety limits cap each proposal at 50 edits and each delta
+to `[-1.0, +1.0]`; these limits apply to all LLM providers. The Ollama
+sampling temperature defaults to `0.7` (previously `0.4`); set
+`OLLAMA_TEMPERATURE` in `.env` to a value from `0` to `2` to adjust it. A
+higher temperature can make proposals more varied, but does not make the model
+reason more deeply or guarantee a better score.
 
 Cloud model defaults and Ollama settings can also be overridden in `.env`:
 `GEMINI_MODEL`, `OPENAI_MODEL`, `ANTHROPIC_MODEL`, `OLLAMA_MODEL`, and
-`OLLAMA_BASE_URL`. Defaults are listed in `config.py`.
+`OLLAMA_BASE_URL`, `OLLAMA_TEMPERATURE`, and `OLLAMA_TIMEOUT_SECONDS`. Defaults
+are listed in `config.py`.
 
 ## 6. Run sequential generations with a chosen LLM
 
