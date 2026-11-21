@@ -1,9 +1,11 @@
+import json
+import tempfile
 import unittest
 import sys
 from unittest.mock import patch
 from environment.breakout import BreakoutEnv
 from model.rnn import BreakoutRNN
-from model.weights import apply_patches
+from model.weights import apply_patches, load_weights, save_weights
 from programmer import create_programmer
 
 
@@ -60,6 +62,22 @@ class ProjectTests(unittest.TestCase):
         model = BreakoutRNN(seed=9)
         obs = (0.5, 0.7, 0.1, -0.8, 0.5, 0.0, 0.1)
         self.assertIn(model.act(obs), (0, 1, 2))
+
+    def test_rnn_has_two_hidden_layers_and_expected_parameter_count(self):
+        model = BreakoutRNN(seed=9)
+        parameter_count = sum(
+            getattr(model, name).numel() for name in model.MATRIX_NAMES
+        )
+        self.assertEqual(model.hidden_layers, 2)
+        self.assertEqual(parameter_count, 963)
+
+    def test_two_layer_checkpoint_round_trip(self):
+        original = BreakoutRNN(seed=9)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = f"{directory}\\weights.json"
+            save_weights(original, checkpoint)
+            restored = load_weights(BreakoutRNN(seed=1), checkpoint)
+        self.assertEqual(restored.get_weights(), original.get_weights())
 
     def test_direct_patch_changes_weight(self):
         model = BreakoutRNN(seed=9)
@@ -153,8 +171,37 @@ class ProjectTests(unittest.TestCase):
             }],
         })
 
+    def test_ollama_retries_truncated_json_with_shorter_request(self):
+        programmer = create_programmer("ollama", model_name="test-local-model")
+        responses = [
+            {"message": {"content": '{"reasoning":"incomplete","modifications":['}},
+            {
+                "message": {
+                    "content": (
+                        '{"reasoning":"edit output weights","modifications":['
+                        '{"matrix":"W_hy","row":0,"column":1,"delta":0.03}]}'
+                    )
+                }
+            },
+        ]
+        with patch.object(
+            programmer, "_post_json", side_effect=responses
+        ) as post_json:
+            proposal = programmer.propose_modifications({}, {}, 0)
+
+        self.assertEqual(len(post_json.call_args_list), 2)
+        self.assertEqual(len(proposal["modifications"]), 1)
+        retry_body = post_json.call_args_list[1][0][1]
+        self.assertEqual(
+            retry_body["format"]["properties"]["modifications"]["maxItems"],
+            12,
+        )
+        self.assertLessEqual(retry_body["options"]["temperature"], 0.2)
+        self.assertIn("one retry", proposal["reasoning"])
+
     def test_ollama_disables_thinking_for_json_proposals(self):
         programmer = create_programmer("ollama", model_name="test-local-model")
+        metrics = {"average_score": 1.3333, "average_steps": 5000}
         response = {
             "message": {
                 "content": '{"reasoning":"small adjustment","modifications":[]}'
@@ -163,13 +210,21 @@ class ProjectTests(unittest.TestCase):
         with patch.object(
             programmer, "_post_json", return_value=response
         ) as post_json:
-            programmer.propose_modifications({}, {}, 0)
+            programmer.propose_modifications({}, metrics, 0)
         body = post_json.call_args.args[1]
         self.assertIs(body["think"], False)
         self.assertEqual(body["options"]["temperature"], programmer.temperature)
         self.assertEqual(body["format"]["type"], "object")
         self.assertIn("modifications", body["format"]["required"])
+        user_payload = json.loads(body["messages"][1]["content"])
+        self.assertEqual(user_payload["training_seed_metrics"], metrics)
         self.assertEqual(body["format"]["properties"]["modifications"]["maxItems"], 50)
+        self.assertEqual(
+            body["format"]["properties"]["modifications"]["items"][
+                "properties"
+            ]["matrix"]["enum"],
+            list(BreakoutRNN.MATRIX_NAMES),
+        )
         delta_schema = body["format"]["properties"]["modifications"]["items"][
             "properties"
         ]["delta"]
@@ -219,9 +274,9 @@ class ProjectTests(unittest.TestCase):
             ):
                 programmer.propose_modifications({}, {}, 0)
 
-    def test_ollama_discards_invalid_patch_fields(self):
+    def test_ollama_retries_when_all_patch_fields_are_invalid(self):
         programmer = create_programmer("ollama", model_name="test-local-model")
-        response = {
+        invalid_response = {
             "message": {
                 "content": (
                     '{"reasoning":"edit","modifications":['
@@ -229,14 +284,32 @@ class ProjectTests(unittest.TestCase):
                 )
             }
         }
-        with patch.object(programmer, "_post_json", return_value=response):
+        valid_response = {
+            "message": {
+                "content": (
+                    '{"reasoning":"edit output layer","modifications":['
+                    '{"matrix":"W_hy","row":0,"column":1,"delta":0.03}]}'
+                )
+            }
+        }
+        with patch.object(
+            programmer,
+            "_post_json",
+            side_effect=[invalid_response, valid_response],
+        ) as post_json:
             proposal = programmer.propose_modifications({}, {}, 0)
-        self.assertEqual(proposal["modifications"], [])
-        self.assertIn("discarded 1 invalid", proposal["reasoning"])
+        self.assertEqual(len(post_json.call_args_list), 2)
+        self.assertEqual(proposal["modifications"], [{
+            "matrix": "W_hy",
+            "row": 0,
+            "column": 1,
+            "delta": 0.03,
+        }])
+        self.assertIn("one retry", proposal["reasoning"])
 
-    def test_ollama_discards_out_of_range_deltas(self):
+    def test_ollama_retries_when_all_deltas_are_out_of_range(self):
         programmer = create_programmer("ollama", model_name="test-local-model")
-        response = {
+        invalid_response = {
             "message": {
                 "content": (
                     '{"reasoning":"edit","modifications":['
@@ -244,10 +317,22 @@ class ProjectTests(unittest.TestCase):
                 )
             }
         }
-        with patch.object(programmer, "_post_json", return_value=response):
+        valid_response = {
+            "message": {
+                "content": (
+                    '{"reasoning":"smaller output edit","modifications":['
+                    '{"matrix":"W_hy","row":0,"column":1,"delta":0.1}]}'
+                )
+            }
+        }
+        with patch.object(
+            programmer,
+            "_post_json",
+            side_effect=[invalid_response, valid_response],
+        ):
             proposal = programmer.propose_modifications({}, {}, 0)
-        self.assertEqual(proposal["modifications"], [])
-        self.assertIn("discarded 1 invalid", proposal["reasoning"])
+        self.assertEqual(proposal["modifications"][0]["delta"], 0.1)
+        self.assertIn("one retry", proposal["reasoning"])
 
     def test_request_timeout_has_clear_error(self):
         programmer = create_programmer("ollama")

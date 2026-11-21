@@ -3,6 +3,7 @@
 import json
 import math
 import os
+from copy import deepcopy
 
 import config
 from programmer.base import BaseWeightProgrammer, SYSTEM_INSTRUCTIONS
@@ -20,7 +21,7 @@ OLLAMA_PROPOSAL_SCHEMA = {
                 "properties": {
                     "matrix": {
                         "type": "string",
-                        "enum": ["W_xh", "W_hh", "W_hy", "b_h", "b_y"],
+                        "enum": list(config.RNN_WEIGHT_SHAPES),
                     },
                     "row": {"type": "integer"},
                     "column": {"type": "integer"},
@@ -39,6 +40,12 @@ OLLAMA_PROPOSAL_SCHEMA = {
     "required": ["reasoning", "modifications"],
     "additionalProperties": False,
 }
+
+RETRY_MAX_PATCHES = 12
+
+
+class InvalidOllamaProposalError(RuntimeError):
+    """Raised when Ollama returns malformed or unusable proposal content."""
 
 
 class OllamaWeightProgrammer(BaseWeightProgrammer):
@@ -71,7 +78,7 @@ class OllamaWeightProgrammer(BaseWeightProgrammer):
         if not math.isfinite(self.temperature) or not 0 <= self.temperature <= 2:
             raise ValueError("OLLAMA_TEMPERATURE must be between 0 and 2.")
 
-    def propose_modifications(self, weights, metrics, generation):
+    def _request_proposal(self, weights, metrics, generation, retry=False):
         ollama_instructions = (
             f"{SYSTEM_INSTRUCTIONS}\n"
             "Return a focused proposal that tests a plausible behavior "
@@ -83,6 +90,20 @@ class OllamaWeightProgrammer(BaseWeightProgrammer):
             "coordinates required for that matrix: row and column for matrices, "
             "or index for biases."
         )
+        proposal_schema = OLLAMA_PROPOSAL_SCHEMA
+        temperature = self.temperature
+        if retry:
+            ollama_instructions += (
+                "\nThe previous response was invalid or incomplete. This is "
+                "one retry: return a complete JSON object only, with a "
+                "one-sentence rationale and at most 12 modifications. Include "
+                "row and column for every matrix edit or index for every bias edit."
+            )
+            proposal_schema = deepcopy(OLLAMA_PROPOSAL_SCHEMA)
+            proposal_schema["properties"]["modifications"]["maxItems"] = min(
+                RETRY_MAX_PATCHES, config.MAX_WEIGHT_PATCHES
+            )
+            temperature = min(temperature, 0.2)
         body = {
             "model": self.model_name,
             "messages": [
@@ -94,10 +115,10 @@ class OllamaWeightProgrammer(BaseWeightProgrammer):
                     ),
                 },
             ],
-            "format": OLLAMA_PROPOSAL_SCHEMA,
+            "format": proposal_schema,
             "think": False,
             "stream": False,
-            "options": {"temperature": self.temperature},
+            "options": {"temperature": temperature},
         }
         response_data = self._post_json(
             f"{self.base_url}/api/chat",
@@ -108,7 +129,7 @@ class OllamaWeightProgrammer(BaseWeightProgrammer):
         try:
             raw = response_data["message"]["content"]
         except (KeyError, TypeError) as exc:
-            raise RuntimeError(
+            raise InvalidOllamaProposalError(
                 f"Unexpected Ollama response: {response_data}"
             ) from exc
         if not isinstance(raw, str) or not raw.strip():
@@ -120,29 +141,27 @@ class OllamaWeightProgrammer(BaseWeightProgrammer):
             if done_reason:
                 details.append(f"generation ended with reason {done_reason!r}")
             suffix = f" ({'; '.join(details)})" if details else ""
-            raise RuntimeError(
+            raise InvalidOllamaProposalError(
                 f"Ollama returned an empty final answer{suffix}. "
                 "Thinking is disabled for this request; check the model/server "
                 "and try again."
             )
         try:
-            proposal = self._parse_proposal(raw)
+            return self._parse_proposal(raw)
         except RuntimeError as exc:
-            raise RuntimeError(
-                f"Ollama returned an unusable proposal: {exc}. "
-                "The experiment stopped without applying any edits."
+            raise InvalidOllamaProposalError(
+                f"Ollama returned an unusable proposal: {exc}"
             ) from exc
-        dimensions = {
-            "W_xh": (7, 16),
-            "W_hh": (16, 16),
-            "W_hy": (16, 3),
-            "b_h": (16,),
-            "b_y": (3,),
-        }
+
+    def _validate_modifications(self, modifications):
+        dimensions = config.RNN_WEIGHT_SHAPES
         accepted = []
         rejected_count = 0
-        for patch in proposal["modifications"]:
-            if len(accepted) >= config.MAX_WEIGHT_PATCHES or not isinstance(patch, dict):
+        for patch in modifications:
+            if (
+                len(accepted) >= config.MAX_WEIGHT_PATCHES
+                or not isinstance(patch, dict)
+            ):
                 rejected_count += 1
                 continue
             matrix = patch.get("matrix")
@@ -183,10 +202,51 @@ class OllamaWeightProgrammer(BaseWeightProgrammer):
                     "column": column,
                     "delta": delta,
                 })
-        proposal["modifications"] = accepted
-        if rejected_count:
-            proposal["reasoning"] += (
-                f" The client discarded {rejected_count} invalid or excessive "
-                "modification(s); only validated bounded scalar edits are eligible."
+        return accepted, rejected_count
+
+    def propose_modifications(self, weights, metrics, generation):
+        first_failure = None
+        for attempt in range(2):
+            try:
+                proposal = self._request_proposal(
+                    weights, metrics, generation, retry=bool(attempt)
+                )
+            except InvalidOllamaProposalError as exc:
+                if attempt == 0:
+                    first_failure = exc
+                    continue
+                raise RuntimeError(
+                    "Ollama returned an unusable proposal after one retry. "
+                    f"First attempt: {first_failure}. Retry: {exc}. "
+                    "The experiment stopped without applying any edits."
+                ) from exc
+
+            modifications = proposal["modifications"]
+            accepted, rejected_count = self._validate_modifications(
+                modifications
             )
-        return proposal
+            if modifications and not accepted:
+                failure = InvalidOllamaProposalError(
+                    f"all {rejected_count} proposed edits failed client validation"
+                )
+                if attempt == 0:
+                    first_failure = failure
+                    continue
+                raise RuntimeError(
+                    "Ollama returned no valid edits after one retry; "
+                    f"the retry's {rejected_count} edits failed validation. "
+                    "The experiment stopped without applying any edits."
+                )
+
+            proposal["modifications"] = accepted
+            if rejected_count:
+                proposal["reasoning"] += (
+                    f" The client discarded {rejected_count} invalid or excessive "
+                    "modification(s); only validated bounded scalar edits are eligible."
+                )
+            if attempt:
+                proposal["reasoning"] += (
+                    " The first response was invalid; this proposal was generated "
+                    "on one retry."
+                )
+            return proposal

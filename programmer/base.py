@@ -4,10 +4,14 @@ import json
 import urllib.error
 import urllib.request
 
+import config
+
 
 SYSTEM_INSTRUCTIONS = """
-You are programming the weight space of a small vanilla RNN controlling Breakout.
-Matrices: W_xh [7,16], W_hh [16,16], W_hy [16,3], b_h [16], b_y [3].
+You are programming a two-layer vanilla RNN controlling Breakout. Each
+recurrent layer has 16 hidden units.
+Matrices: W_xh [7,16], W_hh1 [16,16], W_h1h2 [16,16],
+W_hh2 [16,16], W_hy [16,3], b_h1 [16], b_h2 [16], b_y [3].
 Inputs: ball_x [0,1], ball_y [0,1], ball_vx [-1,1], ball_vy [-1,1],
 paddle_center_x [0,1], ball_offset_from_paddle [-1,1],
 vertical_distance_to_paddle [0,1].
@@ -25,13 +29,13 @@ Return JSON only:
 {
   "reasoning": "brief explanation",
   "modifications": [
-    {"matrix":"W_hy","row":0,"column":1,"delta":0.03},
+    {"matrix":"W_h1h2","row":0,"column":1,"delta":0.03},
     {"matrix":"b_y","index":2,"delta":-0.02}
   ]
 }
 At most 50 modifications. Each delta must be between -1.0 and +1.0.
 For matrices use row and column. For bias vectors use index.
-Only use W_xh, W_hh, W_hy, b_h, b_y.
+Only use W_xh, W_hh1, W_h1h2, W_hh2, W_hy, b_h1, b_h2, b_y.
 No full matrices, markdown fences, code, or extra keys.
 An empty modifications list is allowed if evidence is insufficient.
 """
@@ -58,13 +62,19 @@ class BaseWeightProgrammer:
     def _proposal_payload(self, weights, metrics, generation):
         return {
             "generation": int(generation),
-            "architecture": {"input_size": 7, "hidden_size": 16, "output_size": 3},
+            "architecture": {
+                "input_size": config.INPUT_SIZE,
+                "hidden_size": config.HIDDEN_SIZE,
+                "hidden_layers": config.HIDDEN_LAYERS,
+                "output_size": config.OUTPUT_SIZE,
+            },
             "action_mapping": {"0": "left", "1": "stay", "2": "right"},
             "training_seed_metrics": metrics,
             "current_weights": weights,
             "instruction": (
-                "Suggest conservative direct weight edits to improve average "
-                "score without memorizing individual seeds."
+                "Use a testable hypothesis and purposeful weight changes to "
+                "improve average score. Use meaningful coordinated edits when "
+                "justified, within the numeric limits, without overfitting seeds."
             ),
         }
 
@@ -96,8 +106,11 @@ class BaseWeightProgrammer:
         try:
             result = json.loads(raw)
         except (TypeError, json.JSONDecodeError) as exc:
+            preview = repr(raw)
+            if len(preview) > 500:
+                preview = preview[:497] + "..."
             raise RuntimeError(
-                f"{self.provider_name} returned invalid proposal JSON: {raw!r}"
+                f"{self.provider_name} returned invalid proposal JSON: {preview}"
             ) from exc
         if not isinstance(result, dict) or not isinstance(
             result.get("modifications"), list

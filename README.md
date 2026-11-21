@@ -11,17 +11,23 @@ scalar changes to its existing weight matrices.
 
 - Pygame Breakout environment
 - 7 normalized numerical observations
-- Vanilla Elman RNN: 7 inputs → 16 hidden units → 3 outputs
+- Two-layer vanilla Elman RNN: 7 inputs → 16 units per recurrent layer → 3 outputs
 - Actions: `0 = left`, `1 = stay`, `2 = right`
 - The selected LLM proposes direct weight modifications
 - JSON checkpoints preserve every generation
 
 Matrices:
-- `W_xh`: input-to-hidden `[7,16]`
-- `W_hh`: hidden-to-hidden `[16,16]`
-- `W_hy`: hidden-to-output `[16,3]`
-- `b_h`: hidden bias `[16]`
+- `W_xh`: input-to-layer-1 `[7,16]`
+- `W_hh1`: layer-1 recurrent weights `[16,16]`
+- `W_h1h2`: layer-1-to-layer-2 weights `[16,16]`
+- `W_hh2`: layer-2 recurrent weights `[16,16]`
+- `W_hy`: layer-2-to-output `[16,3]`
+- `b_h1`, `b_h2`: hidden biases `[16]` each
 - `b_y`: output bias `[3]`
+
+The two-layer network has 963 parameters. Checkpoints from the previous
+one-layer architecture are incompatible with this model and remain in their
+original output directories.
 
 ## 1. Install (Windows PowerShell)
 
@@ -122,7 +128,10 @@ request: the default request timeout is 600 seconds (10 minutes). Increase
 `OLLAMA_TIMEOUT_SECONDS` in `.env` if your machine needs more time. Ollama
 proposals are requested in a constrained JSON format; edits with invalid
 indices or deltas beyond the configured safety limit are discarded and
-reported rather than applied. The shared prompt encourages meaningful,
+reported rather than applied. If Ollama returns malformed JSON or every edit
+fails validation, the client retries once with a shorter proposal (up to 12
+edits). If that retry is also unusable, the experiment stops with an error.
+The shared prompt encourages meaningful,
 hypothesis-driven proposals and coordinated edits instead of artificially
 minimizing changes. Safety limits cap each proposal at 50 edits and each delta
 to `[-1.0, +1.0]`; these limits apply to all LLM providers. The Ollama
@@ -158,6 +167,16 @@ different output directory for each provider/model comparison so runs do not
 overwrite each other's checkpoints or metrics. Each run writes its own
 `best.json`, history, generation data, and held-out evaluation in that
 directory.
+
+The current experiment uses the two-layer RNN above. To run Ollama evolution
+with it, use a fresh output directory rather than the old one-layer checkpoints:
+
+```powershell
+python main.py --mode evolve --llm ollama --llm-model qwen3.5:4b --generations 5 --output-dir generations\ollama-qwen3.5-4b-deep2
+```
+
+The run starts from the configured initial weights; it does not resume or
+convert a checkpoint from the previous one-layer experiment.
 
 Generation 0 is the random baseline. Each subsequent generation is one
 LLM proposal applied to the best checkpoint so far. Only one model

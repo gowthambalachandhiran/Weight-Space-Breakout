@@ -13,6 +13,7 @@ def save_weights(model, path):
         "architecture": {
             "input_size": model.input_size,
             "hidden_size": model.hidden_size,
+            "hidden_layers": model.hidden_layers,
             "output_size": model.output_size,
         },
         "weights": model.get_weights(),
@@ -25,6 +26,7 @@ def load_weights(model, path):
     expected = {
         "input_size": model.input_size,
         "hidden_size": model.hidden_size,
+        "hidden_layers": model.hidden_layers,
         "output_size": model.output_size,
     }
     if payload.get("architecture") != expected:
