@@ -26,9 +26,10 @@ def load_weights(model, path):
     expected = {
         "input_size": model.input_size,
         "hidden_size": model.hidden_size,
-        "hidden_layers": model.hidden_layers,
         "output_size": model.output_size,
     }
+    if model.hidden_layers != 1:
+        expected["hidden_layers"] = model.hidden_layers
     if payload.get("architecture") != expected:
         raise ValueError("Checkpoint architecture does not match this RNN")
     model.set_weights(payload["weights"])

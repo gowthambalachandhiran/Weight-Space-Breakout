@@ -7,6 +7,51 @@ model can improve a recurrent neural network by directly modifying its weights.
 used.** The RNN performs inference only. The selected LLM proposes bounded
 scalar changes to its existing weight matrices.
 
+## Recorded experiments
+
+All recorded runs use fixed training seeds `[11, 22, 33]` and final held-out
+seeds `[101, 202, 303]`. Held-out seeds are never included in an LLM prompt.
+Generation 0 is always the random baseline. A score is the average number of
+bricks destroyed across the training episodes; win rate is the fraction of
+episodes that completed the board.
+
+### Current two-layer RNN
+
+| Run | Provider/model | Training generations | Training result | Held-out result |
+|---|---|---:|---|---|
+| `generations/ollama-qwen3.5-4b-deep2-retry` | Ollama `qwen3.5:4b`, 2 hidden layers | 0-5 | **33.0 avg** at generation 4; generation 5 fell back to 26.0. New-best generations: 0, 1, 2, 4. | **27.3333 avg**, 37 max, 0 wins |
+| `generations/ollama-qwen3.5-4b-deep2` | Ollama `qwen3.5:4b`, 2 hidden layers | 0-4 | **28.6667 avg** at generation 3-4 | No held-out file recorded |
+
+The strongest recorded run is `ollama-qwen3.5-4b-deep2-retry`. Its best
+training checkpoint occurred at generation 4, after separate proposals
+averaged 26.6667 at generation 0, 28.0 at generation 1, 32.0 at generations
+2-3, and 33.0 at generation 4. The generation-5 candidate scored 26.0, so the
+experiment retained the generation-4 checkpoint. Its final held-out average was
+27.3333 across seeds 101 (22), 202 (23), and 303 (37).
+
+The `deep2` and `deep2-retry` runs demonstrate that direct LLM weight edits
+can improve this implementation on the fixed seeds: the retry run increased
+training average score from 26.6667 to 33.0 (a +6.3333 point improvement).
+This is not yet evidence of reliable generalization; the held-out average is
+lower than the best training average, and neither repeated trials nor a large
+held-out set are available.
+
+### Baseline or incomplete provider runs
+
+| Run | Provider/model | Recorded training result | Notes |
+|---|---|---|---|
+| `generations/claude` | Claude `claude-3-5-sonnet-latest` | 1.3333 avg at generation 0 | Generation 0 baseline only |
+| `generations/gemini` | Gemini `gemini-2.5-flash` | 1.3333 avg at generation 0 | Generation 0 baseline only |
+| `generations/gpt` | OpenAI `gpt-4o-mini` | 1.3333 avg at generation 0 | Generation 0 baseline only |
+| `generations/ollama-qwen3.5-4b` | Ollama `qwen3.5:4b`, one-layer layout | 1.3333 avg through generations 0-10 | Incompatible older checkpoints; no training improvement; held-out 2.3333 avg |
+| `generations/ollama-qwen3.5-4b-temp07` | Ollama `qwen3.5:4b`, temperature 0.7 | 1.3333 avg through generations 0-4 | Incompatible older one-layer layout; no held-out file recorded |
+| `generations/` | Shared/default run | 1.3333 avg at generation 0 | Held-out baseline: 2.3333 avg, 4 max, 0 wins |
+
+These provider directories contain only generation 0, so they are baselines
+rather than completed multi-generation comparisons. The earlier cloud
+checkpoints and the one-layer Ollama directories use an incompatible older
+weight layout and are not converted or resumed by the current experiment.
+
 ## Architecture
 
 - Pygame Breakout environment
@@ -81,6 +126,16 @@ python main.py --mode watch --output-dir generations\ollama-qwen3.5-4b --generat
 
 In the viewer, R restarts the current seed, N advances to the next seed,
 and Esc quits. The RNN controls the paddle automatically.
+
+The viewer can also load checkpoints from the earlier one-layer RNN, including
+the recorded Gemini baseline:
+
+```powershell
+python main.py --mode watch --output-dir generations\gemini --generation 0 --seed 11
+```
+
+Legacy checkpoints are supported for viewing only; current evolution runs use
+the two-layer architecture and do not resume those checkpoints.
 
 ## 4. Run a baseline (no API key required)
 
@@ -177,6 +232,19 @@ python main.py --mode evolve --llm ollama --llm-model qwen3.5:4b --generations 5
 
 The run starts from the configured initial weights; it does not resume or
 convert a checkpoint from the previous one-layer experiment.
+
+Recorded two-layer Ollama runs can be reproduced with separate output
+directories, for example:
+
+```powershell
+python main.py --mode evolve --llm ollama --llm-model qwen3.5:4b --generations 5 --output-dir generations\ollama-qwen3.5-4b-deep2-retry
+python main.py --mode evolve --llm ollama --llm-model qwen3.5:4b --generations 4 --output-dir generations\ollama-qwen3.5-4b-deep2
+```
+
+Use a retry or a separate directory when testing because the evolution loop
+continues from the best checkpoint and appends to the output directory if it
+already exists. Keep provider, model, temperature, and architecture changes in
+distinct directories so their histories remain comparable.
 
 Generation 0 is the random baseline. Each subsequent generation is one
 LLM proposal applied to the best checkpoint so far. Only one model

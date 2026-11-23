@@ -1,6 +1,7 @@
 """CLI for playing Breakout, baseline evaluation, and LLM weight programming."""
 
 import argparse
+import json
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from environment.breakout import run_local_game
 from evaluation.evaluator import evaluate_model
 from evaluation.viewer import watch_model
 from experiments.experiment import run_experiment
-from model.rnn import BreakoutRNN
+from model.rnn import BreakoutRNN, LegacyBreakoutRNN
 from model.weights import load_weights, save_weights
 
 
@@ -33,7 +34,6 @@ def main():
     if args.mode == "play":
         run_local_game(args.seed)
     elif args.mode == "watch":
-        model = BreakoutRNN()
         generations_dir = (
             args.output_dir if args.output_dir is not None else config.GENERATIONS_DIR
         )
@@ -48,6 +48,19 @@ def main():
             raise FileNotFoundError(
                 f"Checkpoint not found: {checkpoint}. Run baseline/evolution first."
             )
+        architecture = json.loads(checkpoint.read_text(encoding="utf-8")).get(
+            "architecture"
+        )
+        legacy_architecture = {
+            "input_size": config.INPUT_SIZE,
+            "hidden_size": config.HIDDEN_SIZE,
+            "output_size": config.OUTPUT_SIZE,
+        }
+        model = (
+            LegacyBreakoutRNN()
+            if architecture == legacy_architecture
+            else BreakoutRNN()
+        )
         load_weights(model, checkpoint)
         watch_model(model, seed=args.seed)
     elif args.mode == "baseline":

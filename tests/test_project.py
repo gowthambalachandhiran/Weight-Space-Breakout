@@ -4,7 +4,7 @@ import unittest
 import sys
 from unittest.mock import patch
 from environment.breakout import BreakoutEnv
-from model.rnn import BreakoutRNN
+from model.rnn import BreakoutRNN, LegacyBreakoutRNN
 from model.weights import apply_patches, load_weights, save_weights
 from programmer import create_programmer
 
@@ -78,6 +78,24 @@ class ProjectTests(unittest.TestCase):
             save_weights(original, checkpoint)
             restored = load_weights(BreakoutRNN(seed=1), checkpoint)
         self.assertEqual(restored.get_weights(), original.get_weights())
+
+    def test_legacy_checkpoint_loads_without_hidden_layers_metadata(self):
+        legacy = LegacyBreakoutRNN()
+        payload = {
+            "architecture": {
+                "input_size": legacy.input_size,
+                "hidden_size": legacy.hidden_size,
+                "output_size": legacy.output_size,
+            },
+            "weights": legacy.get_weights(),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = f"{directory}\\weights.json"
+            with open(checkpoint, "w", encoding="utf-8") as file:
+                json.dump(payload, file)
+            restored = load_weights(LegacyBreakoutRNN(), checkpoint)
+        self.assertEqual(restored.get_weights(), legacy.get_weights())
+        self.assertIn(restored.act((0.5, 0.7, 0.1, -0.8, 0.5, 0.0, 0.1)), (0, 1, 2))
 
     def test_direct_patch_changes_weight(self):
         model = BreakoutRNN(seed=9)
